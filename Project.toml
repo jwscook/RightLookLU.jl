@@ -1,0 +1,11 @@
+name = "RightLookLU"
+uuid = "e1f070b0-f140-4b67-b535-6d047498f3ed"
+authors = ["James Cook <cookjws@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+BlockArrays = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
+ChunkSplitters = "ae650224-84b6-46f8-82ea-d812ca08434e"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
