@@ -33,7 +33,7 @@ struct RLLU{T, M<:AbstractMatrix{T}}
   isempties::Matrix{Bool}
   works::Vector{Matrix{T}}
 end
-function RLLU(A::AbstractMatrix, ntiles::Int)
+function RLLU(A::AbstractMatrix, ntiles::Int=32)
   rowindices = collect(chunks(1:size(A, 1); n=ntiles))
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
   isempties = zeros(Bool, length(rowindices), length(colindices))
