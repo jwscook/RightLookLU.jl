@@ -4,6 +4,8 @@ using Base.Threads, LinearAlgebra, SparseArrays
 using ChunkSplitters
 using BlockArrays
 
+export RLLU
+
 lsolve!(A, L::AbstractSparseArray) = (A .= L \ A) # can't mutate L
 lsolve!(A, L) = ldiv!(A, lu(L), A) # could use a work array here in lu!
 function lsolve!(A, L, work)
@@ -23,7 +25,7 @@ function rsolve!(A, U, work)
   rdiv!(A, luW)
 end
 
-struct RightLookLU{T, M<:AbstractMatrix{T}}
+struct RLLU{T, M<:AbstractMatrix{T}}
   A::M
   ntiles::Int
   rowindices::Vector{UnitRange{Int64}}
@@ -31,24 +33,24 @@ struct RightLookLU{T, M<:AbstractMatrix{T}}
   isempties::Matrix{Bool}
   works::Vector{Matrix{T}}
 end
-function RightLookLU(A::AbstractMatrix, ntiles::Int)
+function RLLU(A::AbstractMatrix, ntiles::Int)
   rowindices = collect(chunks(1:size(A, 1); n=ntiles))
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
   isempties = zeros(Bool, length(rowindices), length(colindices))
   A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
   works = [similar(A, maximum(length(is) for is in rowindices),
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
-  return RightLookLU(A, ntiles, rowindices, colindices, isempties, works)
+  return RLLU(A, ntiles, rowindices, colindices, isempties, works)
 end
 
-tile(A::RightLookLU{T, M}, i, j) where {T, M<:BlockArray{T}} = blocks(A.A)[i, j]
+tile(A::RLLU{T, M}, i, j) where {T, M<:BlockArray{T}} = blocks(A.A)[i, j]
 
-function tile(A::RightLookLU{T, M}, i, j) where {T, M}
+function tile(A::RLLU{T, M}, i, j) where {T, M}
   is, js = A.rowindices[i], A.colindices[j]
   return view(A.A, is, js)
 end
 
-function LinearAlgebra.lu!(RL::RightLookLU, A::AbstractMatrix)
+function LinearAlgebra.lu!(RL::RLLU, A::AbstractMatrix)
   tasks = Task[]
   for (i, is) in enumerate(RL.rowindices), (j, js) in enumerate(RL.colindices)
     RL.isempties[i, j] && continue # must have same sparsity pattern TODO check
@@ -57,16 +59,18 @@ function LinearAlgebra.lu!(RL::RightLookLU, A::AbstractMatrix)
   wait.(tasks)
   return lu!(RL)
 end
-function LinearAlgebra.lu!(RL::RightLookLU)
+function LinearAlgebra.lu!(RL::RLLU)
   for level in 1:RL.ntiles
     factorise!(RL, level)
   end
   return RL
 end
 
-function factorise!(A::RightLookLU, level)
+function factorise!(A::RLLU, level)
   All = subtractleft!(A, level, level)
   Lll, Ull = lu!(All, NoPivot(); check=false)
+  Lll = LowerTriangular(Lll) # non-allocating
+  Ull = UpperTriangular(Ull) # non-allocating
   lks = Vector{Tuple{Int,Int}}()
   for k in level + 1:A.ntiles
       push!(lks, (level, k))
@@ -78,7 +82,7 @@ function factorise!(A::RightLookLU, level)
   return A
 end
 
-function lookright!(A::RightLookLU, i, j, L, U)
+function lookright!(A::RLLU, i, j, L, U)
   @assert i != j 
   Aij = subtractleft!(A, i, j)
   A.isempties[i, j] && return
@@ -97,7 +101,7 @@ function _mul!(A::SparseMatrixCSC, L, U)
   mul!(A, L, U, -1, true) #mul!(C, A, B, α, β); C == A * B * α + C_original * β
 end
 
-function subtractleft!(A::RightLookLU, i, j)
+function subtractleft!(A::RLLU, i, j)
   Aij = tile(A, i, j)
   for k in 1:min(i, j) - 1
     (A.isempties[i, k] || A.isempties[k, j]) && continue

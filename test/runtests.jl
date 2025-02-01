@@ -25,7 +25,7 @@ function foo()
   s = test_matrix(ComplexF64; ntiles=32, tilesize=1024, overlap=16)
   s .+= 10 * I(size(s, 1))
   sc = deepcopy(Matrix(s))
-  rl = RightLookLU(sc, 16)
+  rl = RLLU(sc, 16)
   lu!(rl)
   lu!(rl, sc)
   @profilehtml [lu!(rl, sc) for _ in 1:10]
@@ -36,11 +36,11 @@ function foo()
     A = rand(ComplexF64, n, n)
     L, U = lu(A, NoPivot())
     Ac = deepcopy(A)
-    LR = RightLookLU(Ac, lutiles)
+    LR = RLLU(Ac, lutiles)
     lu!(LR)
     L1, U1 = tril(LR.A, -1) .+ I(n), triu(LR.A)
     @test L1 * U1 ≈ A
-    t1 = mybenchmark((x...)->lu!(RightLookLU(x...)), A, lutiles; n=10)
+    t1 = mybenchmark((x...)->lu!(RLLU(x...)), A, lutiles; n=10)
     t2 = mybenchmark(x->lu!(x, NoPivot()), A; n=10)
     @show n, lutiles, t1 / t2
   end
@@ -52,11 +52,11 @@ function foo()
     tb2 = mybenchmark(x->lu!(lu_s, x), s; n=20)
     for lutiles in min.(size(s, 1), (8, 10, 12, 14, 16, 20))
       sc = deepcopy(s)
-      LR = RightLookLU(sc, lutiles)
+      LR = RLLU(sc, lutiles)
       lu!(LR)
       L2, U2 = tril(LR.A, -1) .+ I(size(LR.A, 1)), triu(LR.A)
       @test L2 * U2 ≈ s
-      ta1 = mybenchmark((x...)->lu!(RightLookLU(x...)), s, lutiles; n=20)
+      ta1 = mybenchmark((x...)->lu!(RLLU(x...)), s, lutiles; n=20)
       ta2 = mybenchmark(x->lu!(LR, x), s; n=20)
       #lutilesize = size(s, 1) ÷ lutiles
       @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
