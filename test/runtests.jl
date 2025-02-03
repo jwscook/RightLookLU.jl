@@ -24,11 +24,20 @@ using StatProfilerHTML
 function foo()
   s = test_matrix(ComplexF64; ntiles=32, tilesize=1024, overlap=16)
   s .+= 10 * I(size(s, 1))
+  b = rand(ComplexF64, size(s, 1))
+  x = s \ b
   sc = deepcopy(Matrix(s))
   rl = RLLU(sc, 16)
-  lu!(rl)
-  lu!(rl, sc)
-  @profilehtml [lu!(rl, sc) for _ in 1:10]
+  lurl = lu!(rl)
+  xrl = rl \ b
+  @test xrl ≈ x
+  @profilehtml [ldiv!(x, lurl, b) for _ in 1:10]
+  #@assert false
+  s2 = test_matrix(ComplexF64; ntiles=32, tilesize=1024, overlap=16)
+  s2 .+= 10 * I(size(s2, 1))
+  lu!(rl, s2)
+#  @profilehtml [lu!(rl, s2) for _ in 1:10]
+
   #return
 
 @testset "rightlooklu!" begin
@@ -50,18 +59,23 @@ function foo()
     lu_s = lu(deepcopy(s))
     tb1 = mybenchmark(x->lu!(x, NoPivot()), s; n=20)
     tb2 = mybenchmark(x->lu!(lu_s, x), s; n=20)
+    b = rand(ComplexF64, size(s, 1))
+    tb3 = mybenchmark(x->x \ b, lu_s; n=20)
     for lutiles in unique(min.(size(s, 1), (8, 16, 32, 64)))
       sc = deepcopy(s)
       LR = RLLU(sc, lutiles)
-      lu!(LR)
+      lulrlu = deepcopy(lu!(LR))
       L2, U2 = tril(LR.A, -1) .+ I(size(LR.A, 1)), triu(LR.A)
       @test L2 * U2 ≈ s
       ta1 = mybenchmark((x...)->lu!(RLLU(x...)), s, lutiles; n=20)
       ta2 = mybenchmark(x->lu!(LR, x), s; n=20)
-      #lutilesize = size(s, 1) ÷ lutiles
-      @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
+  #    @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
+      luumfpack = lu(s)
+      ta3 = mybenchmark(x->x \ b, lulrlu; n=20)
+      @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2, ta3 / tb3
     end
   end
+
 end
 end
 foo()
