@@ -32,16 +32,20 @@ struct RLLU{T, M<:AbstractMatrix{T}}
   colindices::Vector{UnitRange{Int64}}
   isempties::Matrix{Bool}
   works::Vector{Matrix{T}}
+  istransposed::Ref{Bool}
 end
 function RLLU(A::AbstractMatrix, ntiles::Int=32)
+  @assert ntiles <= minimum(size(A))
   rowindices = collect(chunks(1:size(A, 1); n=ntiles))
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
   isempties = zeros(Bool, length(rowindices), length(colindices))
   A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
   works = [similar(A, maximum(length(is) for is in rowindices),
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
-  return RLLU(A, ntiles, rowindices, colindices, isempties, works)
+  return RLLU(A, ntiles, rowindices, colindices, isempties, works, Ref(false))
 end
+Base.size(A::RLLU) = size(A.A)
+Base.size(A::RLLU, i) = size(A.A, i)
 
 tile(A::RLLU{T, M}, i, j) where {T, M<:BlockArray{T}} = blocks(A.A)[i, j]
 
@@ -64,6 +68,21 @@ function LinearAlgebra.lu!(RL::RLLU)
     factorise!(RL, level)
   end
   return RL
+end
+function LinearAlgebra.transpose!(A::RLLU)
+  A.rowindices, A.colindices = A.colindices, A.rowindices
+  transpose!(m)
+  transpose!(A.empties)
+  return A
+end
+function LinearAlgebra.transpose!(A::RLLU{T, <:BlockArray}) where T
+  tmp = deepcopy(A.rowindices)
+  A.rowindices .= deepcopy(A.colindices)
+  A.colindices .= tmp
+  m = Matrix(A.A)
+  A.A .= transpose(m)
+  A.isempties .= A.isempties'
+  return A
 end
 
 function factorise!(A::RLLU, level)
@@ -109,7 +128,7 @@ function subtractleft!(A::RLLU, i, j)
     Ukj = tile(A, k, j)
     _subtractleftmul!(Aij, Lik, Ukj)
   end
-  A.isempties[i, j] = iszero(Aij)
+  A.isempties[i, j] = isempty(Aij) || iszero(Aij)
   return Aij
 end
 
@@ -119,46 +138,107 @@ function LinearAlgebra.ldiv!(x, A::RLLU, b)
   return ldiv!(A, x)
 end
 
-function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T}) where T
-  L, U = LowerTriangular(A.A), UpperTriangular(A.A) # non-allocating
-  #  L won't have a unit diagonal so make that explicit in the loop
-  n = size(L, 1)
-  s = zeros(T, size(b, 2))
-  colmask = ones(Bool, n)
-  iblock = 0
-  function _fillmask(i)
-    newiblock = findfirst(x->in(i, x), A.rowindices)
-    if newiblock != iblock
-      iblock = newiblock
-      for j in 1:A.ntiles
-        colmask[A.colindices[j]] .= !A.isempties[iblock, j]
-      end
-    end
+#function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T}) where T
+#  #L = U = A.A
+#  L, U = LowerTriangular(A.A), UpperTriangular(A.A) # non-allocating
+#  #  L won't have a unit diagonal so make that explicit in the loop
+#  n = size(L, 1)
+#  s = zeros(T, size(b, 2))
+#  colmask = ones(Bool, n)
+#  iblock = 0
+#  function _fillmask(i)
+#    newiblock = findfirst(x->in(i, x), A.rowindices)
+#    if newiblock != iblock
+#      iblock = newiblock
+#      for j in 1:A.ntiles
+#        colmask[A.colindices[j]] .= !A.isempties[iblock, j]
+#      end
+#    end
+#  end
+#  # Solve Ly = b
+#  @inbounds for i in 1:n
+#    _fillmask(i)
+#    fill!(s, 0)
+#    for k in 1:size(b, 2)
+#      @simd for j in filter(l->colmask[l], 1:i-1)#1:i-1#
+#        s[k] += L[i,j] * b[j, k]
+#      end
+#    end
+#    b[i, :] .= (b[i] .- s)# / L[i, i] # L[i,i] shares a diagonal with U
+#  end
+#  # Solve Ux = y
+#  @inbounds for i in n:-1:1
+#    _fillmask(i)
+#    fill!(s, 0)
+#    for k in 1:size(b, 2)
+#      @simd for j in filter(l->colmask[l], i+1:n)#i+1:n#
+#        s[k] += U[i,j] .* b[j, k]
+#      end
+#    end
+#    b[i, :] .= (b[i] .- s) ./ U[i,i]
+#  end
+#  return b
+#end
+
+#function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T}) where T
+#  #  L won't have a unit diagonal so make that explicit in the loop
+#  n = size(A, 1)
+#  # Solve Ly = b
+#  @inbounds for i in 1:n
+#    for k in 1:size(b, 2)
+#      s = zero(T)
+#      @simd for j in 1:i-1#
+#        s += A.A[i, j] * b[j, k]
+#      end
+#      b[i, k] = (b[i, k] - s)
+#    end
+#  end
+#  # Solve Ux = y
+#  @inbounds for i in n:-1:1
+#    for k in 1:size(b, 2)
+#      s = zero(T)
+#      @simd for j in i+1:n#
+#        s += A.A[i, j] .* b[j, k]
+#      end
+#      b[i, k] = (b[i, k] .- s) / A.A[i,i]
+#    end
+#  end
+#  return b
+#end
+function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T};
+        transposeback=false) where T
+  if !A.istransposed[]
+    transpose!(A)
   end
+  #  L won't have a unit diagonal so make that explicit in the loop
+  n = size(A, 1)
   # Solve Ly = b
-  @inbounds for i in 1:n
-    _fillmask(i)
-    fill!(s, 0)
+  @inbounds for j in 1:n
     for k in 1:size(b, 2)
-      @simd for j in filter(l->colmask[l], 1:i-1)#1:i-1#
-        s[k] += L[i,j] * b[j, k]
+      s = zero(T)
+      @simd for i in 1:j-1#
+        s += A.A[i,j] * b[i, k]
       end
+      b[j, k] = (b[j, k] - s)# / L[i, i] # L[i,i] shares a diagonal with U
     end
-    b[i, :] .= (b[i] .- s)# / L[i, i] # L[i,i] shares a diagonal with U
   end
   # Solve Ux = y
-  @inbounds for i in n:-1:1
-    _fillmask(i)
-    fill!(s, 0)
+  @inbounds for j in n:-1:1
     for k in 1:size(b, 2)
-      @simd for j in filter(l->colmask[l], i+1:n)#i+1:n#
-        s[k] += U[i,j] .* b[j, k]
+      s = zero(T)
+      @simd for i in j+1:n#
+        s += A.A[i,j] .* b[i, k]
       end
+      b[j, k] = (b[j, k] - s) / A.A[j,j]
     end
-    b[i, :] .= (b[i] .- s) ./ U[i,i]
+  end
+  if A.istransposed[] && transposeback
+    transpose!(A)
   end
   return b
 end
+
+
 
 end # module
 
