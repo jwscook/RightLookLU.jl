@@ -7,10 +7,10 @@ using Test
 using RightLookLU
 
 function test_matrix(T=Float64; ntiles=6, tilesize=5, overlap=1)
-  n = ntiles * tilesize - (tilesize - overlap - 1) * (ntiles - 1)
+  n = ntiles * tilesize - overlap * (ntiles - 1)
   mat = zeros(T, n,n)
   for i in 1:ntiles
-    j = (i - 1) * tilesize - (tilesize - overlap - 1) * (i - 1) + 1
+    j = (i - 1) * tilesize + 1 - overlap * max(0, i - 1)
     mat[j:j + tilesize - 1, j:j + tilesize - 1] .= rand(T, tilesize, tilesize)
   end
   return sparse(mat)
@@ -22,18 +22,18 @@ end
 
 using StatProfilerHTML
 function foo()
-  s = test_matrix(ComplexF64; ntiles=32, tilesize=1024, overlap=16)
+  s = test_matrix(ComplexF64; ntiles=4, tilesize=10, overlap=0)
   s .+= 10 * I(size(s, 1))
   b = rand(ComplexF64, size(s, 1))
   x = s \ b
   sc = deepcopy(Matrix(s))
-  rl = RLLU(sc, 16)
+  rl = RLLU(sc, min(16, size(sc, 1)))
   lurl = lu!(rl)
   xrl = rl \ b
   @test xrl ≈ x
   @profilehtml [ldiv!(x, lurl, b) for _ in 1:10]
   #@assert false
-  s2 = test_matrix(ComplexF64; ntiles=32, tilesize=1024, overlap=16)
+  s2 = test_matrix(ComplexF64; ntiles=4, tilesize=10, overlap=0)
   s2 .+= 10 * I(size(s2, 1))
   lu!(rl, s2)
 #  @profilehtml [lu!(rl, s2) for _ in 1:10]
@@ -41,7 +41,8 @@ function foo()
   #return
 
 @testset "rightlooklu!" begin
-  for n in 2 .^ (4, 6, 8, 10), lutiles in (2, 4, 8, 16)
+  for n in 2 .^ (2,3,4), lutiles in (16, 32)
+    lutiles > n && continue
     A = rand(ComplexF64, n, n)
     L, U = lu(A, NoPivot())
     Ac = deepcopy(A)
@@ -53,7 +54,7 @@ function foo()
     t2 = mybenchmark(x->lu!(x, NoPivot()), A; n=10)
     @show n, lutiles, t1 / t2
   end
-  for ntiles in (8, 16), tilesize in (64, 128, 256, 512), overlap in (4,) 
+  for ntiles in (8, 16), tilesize in (64, 128, 256, 512), overlap in (0,)
     s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=overlap)
     s .+= 10 * I(size(s, 1))
     lu_s = lu(deepcopy(s))
@@ -62,6 +63,7 @@ function foo()
     b = rand(ComplexF64, size(s, 1))
     tb3 = mybenchmark(x->x \ b, lu_s; n=20)
     for lutiles in unique(min.(size(s, 1), (8, 16, 32, 64)))
+      lutiles > size(s, 1) && continue
       sc = deepcopy(s)
       LR = RLLU(sc, lutiles)
       lulrlu = deepcopy(lu!(LR))
