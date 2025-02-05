@@ -7,7 +7,7 @@ using Test
 using RightLookLU
 using BenchmarkTools
 
-function test_matrix(T=Float64; ntiles=6, tilesize=5, overlap=1)
+function test_matrix(T=Float64; ntiles=6, tilesize=5, overlap=0)
   n = ntiles * tilesize - overlap * (ntiles - 1)
   mat = zeros(T, n,n)
   for i in 1:ntiles
