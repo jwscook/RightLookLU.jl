@@ -165,7 +165,7 @@ function tileloop!(s, t, b)
   #end
   #@assert sc ≈ s "$sc, $s, $(s1 + transpose(b) * t), $t, $b"
 end
-using Polyester
+
 function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) where {T}
   fill!(s, 0)
   #for i in rows, k in 1:size(b, 2); s[k] += A.A[i, j] * b[i, k]; end; return ### the default
