@@ -72,10 +72,9 @@ function foo()
       L2, U2 = tril(LR.A, -1) .+ I(size(LR.A, 1)), triu(LR.A)
       @test L2 * U2 ≈ s
       ta1 = mybenchmark((x...)->lu!(RLLU(x...)), s, lutiles; n=20)
-      RightLookLU.transpose!(LR) # amortize this cost
-      ta2 = mybenchmark(x->lu!(LR, x; transposeback=false), s; n=20)
+      ta2 = mybenchmark(x->lu!(LR, x), s; n=20)
   #    @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
-      luumfpack = lu(s)
+      transpose!(lulrlu)
       ta3 = mybenchmark(x->x \ b, lulrlu; n=20)
       @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2, ta3 / tb3
     end
