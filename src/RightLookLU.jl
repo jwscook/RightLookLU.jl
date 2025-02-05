@@ -93,8 +93,8 @@ function factorise!(A::RLLU, level)
   Ull = UpperTriangular(Ull) # non-allocating
   lks = Vector{Tuple{Int,Int}}()
   for k in level + 1:A.ntiles
-      push!(lks, (level, k))
-      push!(lks, (k, level))
+    push!(lks, (level, k))
+    push!(lks, (k, level))
   end
   @threads for it in lks
     lookright!(A, it..., Lll, Ull)
@@ -147,36 +147,63 @@ function findtile(i::Int, indices)::Int
   throw(BoundsError())
   return 0
 end
-function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile) where {T}
-  fill!(s, 0)
-  #for i in rows, k in 1:size(b, 2)
-  #  s[k] += A.A[i, j] * b[i, k]
+function tileloop!(s, t::SubArray{<:Number, 1, <:SparseMatrixCSC}, b)
+  @inbounds for k in 1:size(b, 2)
+    @simd for i in axes(t, 1)
+      s[k] += t[i] * b[i, k]
+    end
+  end
+end
+function tileloop!(s, t, b)
+  #sc = deepcopy(s)
+  #s1 = deepcopy(s)
+  BLAS.gemm!('T', 'N', one(eltype(s)), b, t, one(eltype(s)), s) # gemm!(tA, tB, a, A, B, b, C) # C = a*A*B + b*C
+  #@inbounds for k in 1:size(b, 2)
+  #  @simd for i in axes(t, 1)
+  #    sc[k] += t[i] * b[i, k]
+  #  end
   #end
-  #return
+  #@assert sc ≈ s "$sc, $s, $(s1 + transpose(b) * t), $t, $b"
+end
+using Polyester
+function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) where {T}
+  fill!(s, 0)
+  #for i in rows, k in 1:size(b, 2); s[k] += A.A[i, j] * b[i, k]; end; return ### the default
   Δj = A.colindices[jtile].start - 1
-  for itile in itiles
+  itile = findtile(j, A.rowindices) # not necessary if A.rowindices == A.colindices
+  Δi = A.rowindices[itile].start - 1 # not necessary if A.rowindices == A.colindices
+  invAjj = one(T)
+  if xinvAjj
+    @inbounds invAjj = 1 / tile(A, itile, jtile)[j - Δi, j - Δj]
+  end
+
+  #ss = [zeros(T, size(b, 2)) for _ in 1:nthreads()] # comment for non-threaded
+  #@threads for itile in collect(itiles) # comment for non-threaded
+  #  s = ss[threadid()] # comment for non-threaded
+  @inbounds for itile in itiles # UNCOMMENT for non-threaded
     A.isempties[itile, jtile] && continue
     tilerows = A.rowindices[itile]
     Δi = tilerows.start - 1
     t = tile(A, itile, jtile)
+    tj = view(t, :, j - Δj)
     if rows.start <= tilerows.start <= tilerows.stop <= rows.stop
-        for k in 1:size(b, 2)
-          @simd for i in axes(t, 1)
-            s[k] += t[i, j - Δj] * b[i + Δi, k]
-          end
-        end
+      bj = view(b, tilerows, :)
+      tileloop!(s, tj, bj)
     else
       for i in intersect(rows, tilerows)
         for k in 1:size(b, 2)
-          s[k] += t[i - Δi, j - Δj] * b[i, k]
+          @inbounds s[k] += tj[i - Δi] * b[i, k]
         end
       end
     end
   end
+  @inbounds @simd for k in 1:size(b, 2)
+    b[j, k] = (b[j, k] - s[k]) * invAjj # L[j, j] should be 1 but it shares a diagonal with U
+  end
+  #s1 .= sum(ss; init=zeros(T, size(b, 2))) # comment for non-threaded
 end
 function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
     transposeback=false) where {T}
-  # L won't have a unit diagonal so make that explicit in the loop
   if !A.istransposed[]
     transpose!(A)
   end
@@ -186,16 +213,14 @@ function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
   for j in 2:n
     jtile = findtile(j, A.colindices)
     itilemax = findtile(j-1, A.rowindices)
-    hotloopldiv!(s, A, b, 1:j-1, j, 1:itilemax, jtile)
-    @views b[j, :] .= (b[j, :] .- s)
+    hotloopldiv!(s, A, b, 1:j-1, j, 1:itilemax, jtile, false)
   end
   # Solve Ux = y
   @views b[n, :] ./= A.A[n, n]
   for j in n-1:-1:1
     jtile = findtile(j, A.colindices)
     itilemin = findtile(j+1, A.rowindices)
-    hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile)
-    @views b[j, :] .= (b[j, :] .- s) ./ A.A[j, j]
+    hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile, true)
   end
   if A.istransposed[] && transposeback
     transpose!(A)

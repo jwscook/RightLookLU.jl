@@ -21,9 +21,11 @@ function mybenchmark(f::F, args...; n=3) where F
   return minimum([(newargs = deepcopy.(args); @elapsed f(newargs...)) for _ in 1:n])
 end
 
-using StatProfilerHTML
+using StatProfilerHTML, Profile
 function foo()
-  s = test_matrix(ComplexF64; ntiles=4, tilesize=10, overlap=0)
+    ntiles=16
+    tilesize=128
+  s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=0)
   s .+= 10 * I(size(s, 1))
   b = rand(ComplexF64, size(s, 1))
   x = s \ b
@@ -32,17 +34,22 @@ function foo()
   lurl = lu!(rl)
   xrl = rl \ b
   @test xrl ≈ x
-  @profilehtml [ldiv!(x, lurl, b) for _ in 1:10]
+  Profile.init(n=10^7, delay=1e-6)
+  Profile.clear()
+  @profilehtml ldiv!(x, lurl, b)
   #@assert false
-  s2 = test_matrix(ComplexF64; ntiles=4, tilesize=10, overlap=0)
+  s2 = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=0)
   s2 .+= 10 * I(size(s2, 1))
   lu!(rl, s2)
+  ldiv!(rl, b)
+  Profile.clear()
+  @profilehtml ldiv!(rl, b)
 #  @profilehtml [lu!(rl, s2) for _ in 1:10]
 
   #return
 
 @testset "rightlooklu!" begin
-  for n in 2 .^ (2,3,4), lutiles in (16, 32)
+  for n in (128,256), lutiles in (16, 32)
     lutiles > n && continue
     A = rand(ComplexF64, n, n)
     L, U = lu(A, NoPivot())
@@ -56,7 +63,7 @@ function foo()
     @show n, lutiles, t1 / t2
     @benchmark lu!(RLLU($A, $lutiles))
   end
-  for ntiles in (8, 16), tilesize in (64, 128, 256, 512), overlap in (0,)
+  for ntiles in (4, 8, 16), tilesize in (16, 32, 64), overlap in (0,)
     s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=overlap)
     s .+= 10 * I(size(s, 1))
     lu_s = lu(deepcopy(s))
