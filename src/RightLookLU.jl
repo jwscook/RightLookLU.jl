@@ -71,17 +71,18 @@ function LinearAlgebra.lu!(RL::RLLU)
 end
 function LinearAlgebra.transpose!(A::RLLU)
   A.rowindices, A.colindices = A.colindices, A.rowindices
-  transpose!(m)
+  transpose!(A.A)
   transpose!(A.empties)
+  A.istransposed[] = !A.istransposed[]
   return A
 end
 function LinearAlgebra.transpose!(A::RLLU{T, <:BlockArray}) where T
   tmp = deepcopy(A.rowindices)
   A.rowindices .= deepcopy(A.colindices)
   A.colindices .= tmp
-  m = Matrix(A.A)
-  A.A .= transpose(m)
+  A.A .= Matrix(transpose(A.A)) # no inplace for blockarray
   A.isempties .= A.isempties'
+  A.istransposed[] = !A.istransposed[]
   return A
 end
 
@@ -137,49 +138,71 @@ function LinearAlgebra.ldiv!(x, A::RLLU, b)
   x .= b
   return ldiv!(A, x)
 end
-
-#function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T}) where T
-#  #L = U = A.A
-#  L, U = LowerTriangular(A.A), UpperTriangular(A.A) # non-allocating
-#  #  L won't have a unit diagonal so make that explicit in the loop
-#  n = size(L, 1)
-#  s = zeros(T, size(b, 2))
-#  colmask = ones(Bool, n)
-#  iblock = 0
-#  function _fillmask(i)
-#    newiblock = findfirst(x->in(i, x), A.rowindices)
-#    if newiblock != iblock
-#      iblock = newiblock
-#      for j in 1:A.ntiles
-#        colmask[A.colindices[j]] .= !A.isempties[iblock, j]
-#      end
-#    end
-#  end
-#  # Solve Ly = b
-#  @inbounds for i in 1:n
-#    _fillmask(i)
-#    fill!(s, 0)
-#    for k in 1:size(b, 2)
-#      @simd for j in filter(l->colmask[l], 1:i-1)#1:i-1#
-#        s[k] += L[i,j] * b[j, k]
-#      end
-#    end
-#    b[i, :] .= (b[i] .- s)# / L[i, i] # L[i,i] shares a diagonal with U
-#  end
-#  # Solve Ux = y
-#  @inbounds for i in n:-1:1
-#    _fillmask(i)
-#    fill!(s, 0)
-#    for k in 1:size(b, 2)
-#      @simd for j in filter(l->colmask[l], i+1:n)#i+1:n#
-#        s[k] += U[i,j] .* b[j, k]
-#      end
-#    end
-#    b[i, :] .= (b[i] .- s) ./ U[i,i]
-#  end
-#  return b
-#end
-
+fastin(i, inds::UnitRange) = inds.start <= i <= inds.stop
+function findtile(i::Int, indices)::Int
+  for (ii, inds) in enumerate(indices)
+    fastin(i, inds) && return ii
+  end
+  @show i, indices
+  throw(BoundsError())
+  return 0
+end
+function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile) where {T}
+  fill!(s, 0)
+  #for i in rows, k in 1:size(b, 2)
+  #  s[k] += A.A[i, j] * b[i, k]
+  #end
+  #return
+  Δj = A.colindices[jtile].start - 1
+  for itile in itiles
+    A.isempties[itile, jtile] && continue
+    tilerows = A.rowindices[itile]
+    Δi = tilerows.start - 1
+    t = tile(A, itile, jtile)
+    if rows.start <= tilerows.start <= tilerows.stop <= rows.stop
+        for k in 1:size(b, 2)
+          @simd for i in axes(t, 1)
+            s[k] += t[i, j - Δj] * b[i + Δi, k]
+          end
+        end
+    else
+      for i in intersect(rows, tilerows)
+        for k in 1:size(b, 2)
+          s[k] += t[i - Δi, j - Δj] * b[i, k]
+        end
+      end
+    end
+  end
+end
+function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
+    transposeback=false) where {T}
+  # L won't have a unit diagonal so make that explicit in the loop
+  if !A.istransposed[]
+    transpose!(A)
+  end
+  n = size(A, 1)
+  # Solve Ly = b
+  s = zeros(T, size(b, 2))
+  for j in 2:n
+    jtile = findtile(j, A.colindices)
+    itilemax = findtile(j-1, A.rowindices)
+    hotloopldiv!(s, A, b, 1:j-1, j, 1:itilemax, jtile)
+    @views b[j, :] .= (b[j, :] .- s)
+  end
+  # Solve Ux = y
+  @views b[n, :] ./= A.A[n, n]
+  for j in n-1:-1:1
+    jtile = findtile(j, A.colindices)
+    itilemin = findtile(j+1, A.rowindices)
+    hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile)
+    @views b[j, :] .= (b[j, :] .- s) ./ A.A[j, j]
+  end
+  if A.istransposed[] && transposeback
+    transpose!(A)
+  end
+  return b
+end
+#
 #function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T}) where T
 #  #  L won't have a unit diagonal so make that explicit in the loop
 #  n = size(A, 1)
@@ -205,38 +228,38 @@ end
 #  end
 #  return b
 #end
-function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T};
-        transposeback=false) where T
-  if !A.istransposed[]
-    transpose!(A)
-  end
-  #  L won't have a unit diagonal so make that explicit in the loop
-  n = size(A, 1)
-  # Solve Ly = b
-  @inbounds for j in 1:n
-    for k in 1:size(b, 2)
-      s = zero(T)
-      @simd for i in 1:j-1#
-        s += A.A[i,j] * b[i, k]
-      end
-      b[j, k] = (b[j, k] - s)# / L[i, i] # L[i,i] shares a diagonal with U
-    end
-  end
-  # Solve Ux = y
-  @inbounds for j in n:-1:1
-    for k in 1:size(b, 2)
-      s = zero(T)
-      @simd for i in j+1:n#
-        s += A.A[i,j] .* b[i, k]
-      end
-      b[j, k] = (b[j, k] - s) / A.A[j,j]
-    end
-  end
-  if A.istransposed[] && transposeback
-    transpose!(A)
-  end
-  return b
-end
+#function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T};
+#        transposeback=false) where T
+#  if !A.istransposed[]
+#    transpose!(A)
+#  end
+#  #  L won't have a unit diagonal so make that explicit in the loop
+#  n = size(A, 1)
+#  # Solve Ly = b
+#  @inbounds for j in 1:n
+#    for k in 1:size(b, 2)
+#      s = zero(T)
+#      @simd for i in 1:j-1#
+#        s += A.A[i,j] * b[i, k]
+#      end
+#      b[j, k] = (b[j, k] - s)# / L[i, i] # L[i,i] shares a diagonal with U
+#    end
+#  end
+#  # Solve Ux = y
+#  @inbounds for j in n:-1:1
+#    for k in 1:size(b, 2)
+#      s = zero(T)
+#      @simd for i in j+1:n#
+#        s += A.A[i,j] .* b[i, k]
+#      end
+#      b[j, k] = (b[j, k] - s) / A.A[j,j]
+#    end
+#  end
+#  if A.istransposed[] && transposeback
+#    transpose!(A)
+#  end
+#  return b
+#end
 
 
 

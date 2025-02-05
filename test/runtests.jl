@@ -5,6 +5,7 @@ pinthreads(:cores)
 
 using Test
 using RightLookLU
+using BenchmarkTools
 
 function test_matrix(T=Float64; ntiles=6, tilesize=5, overlap=1)
   n = ntiles * tilesize - overlap * (ntiles - 1)
@@ -53,6 +54,7 @@ function foo()
     t1 = mybenchmark((x...)->lu!(RLLU(x...)), A, lutiles; n=10)
     t2 = mybenchmark(x->lu!(x, NoPivot()), A; n=10)
     @show n, lutiles, t1 / t2
+    @benchmark lu!(RLLU($A, $lutiles))
   end
   for ntiles in (8, 16), tilesize in (64, 128, 256, 512), overlap in (0,)
     s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=overlap)
@@ -70,7 +72,8 @@ function foo()
       L2, U2 = tril(LR.A, -1) .+ I(size(LR.A, 1)), triu(LR.A)
       @test L2 * U2 ≈ s
       ta1 = mybenchmark((x...)->lu!(RLLU(x...)), s, lutiles; n=20)
-      ta2 = mybenchmark(x->lu!(LR, x), s; n=20)
+      RightLookLU.transpose!(LR) # amortize this cost
+      ta2 = mybenchmark(x->lu!(LR, x; transposeback=false), s; n=20)
   #    @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
       luumfpack = lu(s)
       ta3 = mybenchmark(x->x \ b, lulrlu; n=20)
