@@ -3,6 +3,8 @@ module RightLookLU
 using Base.Threads, LinearAlgebra, SparseArrays
 using ChunkSplitters
 using BlockArrays
+using HybridBlockArrays
+import HybridBlockArrays: tile
 
 export RLLU
 
@@ -10,7 +12,6 @@ lsolve!(A, L::AbstractSparseArray, _) = (A .= L \ A) # can't mutate L
 function lsolve!(A, L, work)
   W = view(work, 1:size(L, 1), 1:size(L, 2))
   copyto!(W, L) # W .= L
-  #LoopVectorization.vmapntt!(identity, W, L)
   luW = lu!(W, Val(true); check=false) # lu!(W, NoPivot(); check=false) calls generic lu!
   ldiv!(luW, A)
 end
@@ -18,7 +19,6 @@ rsolve!(A, U::AbstractSparseArray, _) = (A .= A / U) # can't mutate U
 function rsolve!(A, U, work)
   W = view(work, 1:size(U, 1), 1:size(U, 2))
   copyto!(W, U) # W .= U
-  #LoopVectorization.vmapntt!(identity, W, U)
   luW = lu!(W, Val(true); check=false) # lu!(W, NoPivot(); check=false) calls generic lu!
   rdiv!(A, luW)
 end
@@ -37,7 +37,8 @@ function RLLU(A::AbstractMatrix, ntiles::Int=32)
   rowindices = collect(chunks(1:size(A, 1); n=ntiles))
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
   isempties = zeros(Bool, length(rowindices), length(colindices))
-  A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
+  #A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
+  A = HybridBlockArray(A, rowindices, colindices; sparsitythreshold=0.3)
   works = [similar(A, maximum(length(is) for is in rowindices),
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
   return RLLU(A, ntiles, rowindices, colindices, isempties, works, Ref(false))
@@ -45,12 +46,13 @@ end
 Base.size(A::RLLU) = size(A.A)
 Base.size(A::RLLU, i) = size(A.A, i)
 
-tile(A::RLLU{T, M}, i, j) where {T, M<:BlockArray{T}} = blocks(A.A)[i, j]
+tile(A::RLLU{T}, i, j) where {T} = tile(A.A, i, j)
+tile(A::BlockArray{T}, i, j) where {T} = blocks(A.A)[i, j]
 
-function tile(A::RLLU{T, M}, i, j) where {T, M}
-  is, js = A.rowindices[i], A.colindices[j]
-  return view(A.A, is, js)
-end
+#function tile(A::RLLU{T, M}, i, j) where {T, M}
+#  is, js = A.rowindices[i], A.colindices[j]
+#  return view(A.A, is, js)
+#end
 
 function LinearAlgebra.lu!(RL::RLLU, A::AbstractMatrix)
   tasks = Task[]
