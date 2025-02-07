@@ -70,9 +70,11 @@ function LinearAlgebra.lu!(RL::RLLU)
   return RL
 end
 function LinearAlgebra.transpose!(A::RLLU)
-  A.rowindices, A.colindices = A.colindices, A.rowindices
+  tmp = deepcopy(A.rowindices)
+  A.rowindices .= A.colindices
+  A.colindices .= tmp
   transpose!(A.A)
-  transpose!(A.empties)
+  A.isempties .= A.isempties'
   A.istransposed[] = !A.istransposed[]
   return A
 end

@@ -2,7 +2,7 @@
 
 julia_version = "1.10.8"
 manifest_format = "2.0"
-project_hash = "4b33549fdfdfe3275e37e5ad38afe276a45cbab1"
+project_hash = "6bf24966401f7483bd30d32ae6aae319ec1b100f"
 
 [[deps.ArrayLayouts]]
 deps = ["FillArrays", "LinearAlgebra"]
@@ -87,6 +87,12 @@ version = "1.10.0"
 deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
 version = "7.2.1+1"
+
+[[deps.TiledArrays]]
+deps = ["ChunkSplitters", "LinearAlgebra"]
+path = "../TiledArrays.jl"
+uuid = "30612b54-f91d-429b-a274-18f43f27c77e"
+version = "0.1.0"
 
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
