@@ -6,8 +6,7 @@ using BlockArrays
 
 export RLLU
 
-lsolve!(A, L::AbstractSparseArray) = (A .= L \ A) # can't mutate L
-lsolve!(A, L) = ldiv!(A, lu(L), A) # could use a work array here in lu!
+lsolve!(A, L::AbstractSparseArray, _) = (A .= L \ A) # can't mutate L
 function lsolve!(A, L, work)
   W = view(work, 1:size(L, 1), 1:size(L, 2))
   copyto!(W, L) # W .= L
@@ -15,8 +14,7 @@ function lsolve!(A, L, work)
   luW = lu!(W, Val(true); check=false) # lu!(W, NoPivot(); check=false) calls generic lu!
   ldiv!(luW, A)
 end
-rsolve!(A, U::AbstractSparseArray) = (A .= A / U) # can't mutate U
-rsolve!(A, U) = rdiv!(A, lu(U)) # could use a work array here in lu!
+rsolve!(A, U::AbstractSparseArray, _) = (A .= A / U) # can't mutate U
 function rsolve!(A, U, work)
   W = view(work, 1:size(U, 1), 1:size(U, 2))
   copyto!(W, U) # W .= U
@@ -150,22 +148,10 @@ function findtile(i::Int, indices)::Int
   return 0
 end
 function tileloop!(s, t::SubArray{<:Number, 1, <:SparseMatrixCSC}, b)
-  @inbounds for k in 1:size(b, 2)
-    @simd for i in axes(t, 1)
-      s[k] += t[i] * b[i, k]
-    end
-  end
+  s .+= transpose(t) * b
 end
 function tileloop!(s, t, b)
-  #sc = deepcopy(s)
-  #s1 = deepcopy(s)
   BLAS.gemm!('T', 'N', one(eltype(s)), b, t, one(eltype(s)), s) # gemm!(tA, tB, a, A, B, b, C) # C = a*A*B + b*C
-  #@inbounds for k in 1:size(b, 2)
-  #  @simd for i in axes(t, 1)
-  #    sc[k] += t[i] * b[i, k]
-  #  end
-  #end
-  #@assert sc ≈ s "$sc, $s, $(s1 + transpose(b) * t), $t, $b"
 end
 
 function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) where {T}
@@ -179,30 +165,25 @@ function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) w
     @inbounds invAjj = 1 / tile(A, itile, jtile)[j - Δi, j - Δj]
   end
 
-  #ss = [zeros(T, size(b, 2)) for _ in 1:nthreads()] # comment for non-threaded
-  #@threads for itile in collect(itiles) # comment for non-threaded
-  #  s = ss[threadid()] # comment for non-threaded
   @inbounds for itile in itiles # UNCOMMENT for non-threaded
     A.isempties[itile, jtile] && continue
     tilerows = A.rowindices[itile]
     Δi = tilerows.start - 1
     t = tile(A, itile, jtile)
-    tj = view(t, :, j - Δj)
     if rows.start <= tilerows.start <= tilerows.stop <= rows.stop
+      tj = view(t, :, j - Δj)
       bj = view(b, tilerows, :)
       tileloop!(s, tj, bj)
     else
-      for i in intersect(rows, tilerows)
-        for k in 1:size(b, 2)
-          @inbounds s[k] += tj[i - Δi] * b[i, k]
-        end
-      end
+      is = intersect(rows, tilerows)
+      tj = view(t, is .- Δi, j - Δj)
+      bj = view(b, is, :)
+      tileloop!(s, tj, bj)
     end
   end
   @inbounds @simd for k in 1:size(b, 2)
     b[j, k] = (b[j, k] - s[k]) * invAjj # L[j, j] should be 1 but it shares a diagonal with U
   end
-  #s1 .= sum(ss; init=zeros(T, size(b, 2))) # comment for non-threaded
 end
 function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
     transposeback=false) where {T}
