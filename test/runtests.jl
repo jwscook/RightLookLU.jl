@@ -45,7 +45,6 @@ function foo()
   Profile.clear()
   @profilehtml ldiv!(rl, b)
 #  @profilehtml [lu!(rl, s2) for _ in 1:10]
-
   #return
 
 @testset "rightlooklu!" begin
@@ -82,6 +81,8 @@ function foo()
       ta2 = mybenchmark(x->lu!(LR, x), s; n=20)
   #    @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
       transpose!(lulrlu)
+      x = s \ b
+      @test x ≈ lulrlu \ b
       ta3 = mybenchmark(x->x \ b, lulrlu; n=20)
       @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2, ta3 / tb3
     end
