@@ -149,38 +149,38 @@ function findtile(i::Int, indices)::Int
   throw(BoundsError())
   return 0
 end
-function tileloop!(s::Number, t::SubArray{<:Number, 1, <:SparseMatrixCSC}, b)
-  is, j = t.indices
+function tileloop!(s::Number, t::SparseMatrixCSC, b, j, trows, brows)
   cs = t.parent.colptr[j]:(t.parent.colptr[j+1] - 1)
   for c in cs
     i = t.parent.rowval[c]
-    fastin(i, is) || continue
+    fastin(i, trows) || continue
     tc = t.parent.nzval[c]
-    bi = b[i - is.start + 1]
+    bi = b[i - brows.start + 1]
     s += tc * bi
   end
   return s
-#  return s + transpose(t) * b # TODO write this as a loop
 end
-function tileloop!(s, t::SubArray{<:Number, 1, <:SparseMatrixCSC}, b)
-  is, j = t.indices
+function tileloop!(s, t::SparseMatrixCSC, b, j, trows, brows)
   cs = t.parent.colptr[j]:(t.parent.colptr[j+1]-1)
   for c in cs
     i = t.parent.rowval[c]
-    fastin(i, is) || continue
+    fastin(i, trows) || continue
     for k in 1:size(b, 2)
-      s[k] += t.parent.nzval[c] * b[i - is.start + 1, k]
+      s[k] += t.parent.nzval[c] * b[i - brows.start + 1, k]
     end
   end
   return s
-  # return s .+= transpose(t) * b # TODO write this as a loop
 end
-function tileloop!(s::Number, t, b)
-  return s + BLAS.dotu(t, b)
+function tileloop!(s::Number, t, b, j, trows, brows)
+  tv = view(t, trows, j)
+  bv = view(b, brows, :)
+  return s + BLAS.dotu(tv, bv)
 end
-function tileloop!(s, t, b)
+function tileloop!(s, t, b, j, trows, brows)
+  tv = view(t, trows, j)
+  bv = view(b, brows, :)
   # gemm!(tA, tB, a, A, B, b, C) # C = a*A*B + b*C
-  BLAS.gemm!('T', 'N', one(eltype(s)), b, t, one(eltype(s)), s)
+  BLAS.gemm!('T', 'N', one(eltype(s)), bv, tv, one(eltype(s)), s)
   return s
 end
 function finalloop!(b, s, invAjj, j)
@@ -206,22 +206,17 @@ function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) w
   if xinvAjj
     @inbounds invAjj = 1 / tile(A, itile, jtile)[j - Δi, j - Δj]
   end
-
   @inbounds for itile in itiles
     A.isempties[itile, jtile] && continue
     tilerows = A.rowindices[itile]
     Δi = tilerows.start - 1
     t = tile(A, itile, jtile)
     if rows.start <= tilerows.start <= tilerows.stop <= rows.stop
-      tj = view(t, :, j - Δj) # do views in tileloop! <: Matrix
-      bj = view(b, tilerows, :) # just do index access in tileloop! <: SparseArrayCSC
-      s = tileloop!(s, tj, bj)
+      s = tileloop!(s, t, b, j - Δj, :, tilerows)
     else
       is = intersect(rows, tilerows)
       isempty(is) && continue
-      tj = view(t, is .- Δi, j - Δj)
-      bj = view(b, is, :)
-      s = tileloop!(s, tj, bj) 
+      s = tileloop!(s, t, b, j - Δj, is .- Δi, is)
     end
   end
   finalloop!(b, s, invAjj, j)
