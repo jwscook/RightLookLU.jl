@@ -116,7 +116,7 @@ end
 function _subtractleftmul!(A, L, U)
   A .-= L * U
 end
-function _subtractleftmul!(A::Matrix{T}, L, U) where T
+function _subtractleftmul!(A::Matrix{T}, L::Matrix{T}, U::Matrix{T}) where T
   BLAS.gemm!('N', 'N', -one(T), L, U, one(T), A) # gemm!(tA, tB, alpha, A, B, beta, C) # Update C as alpha*A*B + beta*C or
 end
 function _subtractleftmul!(A::SparseMatrixCSC, L, U)
@@ -150,9 +150,13 @@ function findtile(i::Int, indices)::Int
   return 0
 end
 function tileloop!(s::Number, t::SparseMatrixCSC, b, j, trows, brows)
-  cs = t.colptr[j]:(t.colptr[j+1] - 1)
-  Δi = brows.start - trows.start
-  @inbounds for c in cs
+  # @assert issorted(trows)
+  # @assert issorted(brows)
+  ti1 = trows.start
+  Δi = brows.start - ti1
+  cA, cZ = t.colptr[j], (t.colptr[j+1] - 1)
+  c1 = searchsortedfirst(cA:cZ, ti1) + cA - 1
+  @inbounds for c in c1:cZ
     i = t.rowval[c]
     fastin(i, trows) || continue
     tc = t.nzval[c]
@@ -162,9 +166,11 @@ function tileloop!(s::Number, t::SparseMatrixCSC, b, j, trows, brows)
   return s
 end
 function tileloop!(s, t::SparseMatrixCSC, b, j, trows, brows)
-  cs = t.colptr[j]:(t.colptr[j+1]-1)
-  Δi = brows.start - trows.start
-  @inbounds for c in cs
+  ti1 = trows.start
+  Δi = brows.start - ti1
+  cA, cZ = t.colptr[j], (t.colptr[j+1] - 1)
+  c1 = searchsortedfirst(cA:cZ, ti1) + cA - 1
+  @inbounds for c in c1:cZ
     i = t.rowval[c]
     fastin(i, trows) || continue
     ii = i + Δi
@@ -215,7 +221,7 @@ function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) w
     Δi = tilerows.start - 1
     t = tile(A, itile, jtile)
     if rows.start <= tilerows.start <= tilerows.stop <= rows.stop
-      s = tileloop!(s, t, b, j - Δj, :, tilerows)
+        s = tileloop!(s, t, b, j - Δj, 1:size(t, 1), tilerows)
     else
       is = intersect(rows, tilerows)
       isempty(is) && continue
@@ -244,12 +250,7 @@ function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
   for j in n-1:-1:1
     jtile = findtile(j, A.colindices)
     itilemin = findtile(j+1, A.rowindices)
-    try
-      hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile, true)
-    catch err
-      @show j, jtile, itilemin, size(A), size(b)
-      rethrow(err)
-    end
+    hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile, true)
   end
   if A.istransposed[] && transposeback
     transpose!(A)
