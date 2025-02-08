@@ -150,23 +150,26 @@ function findtile(i::Int, indices)::Int
   return 0
 end
 function tileloop!(s::Number, t::SparseMatrixCSC, b, j, trows, brows)
-  cs = t.parent.colptr[j]:(t.parent.colptr[j+1] - 1)
-  for c in cs
-    i = t.parent.rowval[c]
+  cs = t.colptr[j]:(t.colptr[j+1] - 1)
+  Δi = brows.start - trows.start
+  @inbounds for c in cs
+    i = t.rowval[c]
     fastin(i, trows) || continue
-    tc = t.parent.nzval[c]
-    bi = b[i - brows.start + 1]
-    s += tc * bi
+    tc = t.nzval[c]
+    bi = b[i + Δi]
+    s = muladd(tc, bi, s)
   end
   return s
 end
 function tileloop!(s, t::SparseMatrixCSC, b, j, trows, brows)
-  cs = t.parent.colptr[j]:(t.parent.colptr[j+1]-1)
-  for c in cs
-    i = t.parent.rowval[c]
+  cs = t.colptr[j]:(t.colptr[j+1]-1)
+  Δi = brows.start - trows.start
+  @inbounds for c in cs
+    i = t.rowval[c]
     fastin(i, trows) || continue
+    ii = i + Δi
     for k in 1:size(b, 2)
-      s[k] += t.parent.nzval[c] * b[i - brows.start + 1, k]
+      s[k] += t.nzval[c] * b[ii, k]
     end
   end
   return s
@@ -190,7 +193,7 @@ function finalloop!(b, s, invAjj, j)
   return b
 end
 function finalloop!(b::AbstractVector, s::Number, invAjj, j)
-  b[j] = (b[j] - s) * invAjj
+  @inbounds b[j] = (b[j] - s) * invAjj
   return b
 end
 prepsummand(s::Number) = zero(typeof(s))
