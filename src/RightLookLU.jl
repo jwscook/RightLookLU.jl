@@ -47,12 +47,7 @@ Base.size(A::RLLU) = size(A.A)
 Base.size(A::RLLU, i) = size(A.A, i)
 
 tile(A::RLLU{T}, i, j) where {T} = tile(A.A, i, j)
-tile(A::BlockArray{T}, i, j) where {T} = blocks(A.A)[i, j]
-
-#function tile(A::RLLU{T, M}, i, j) where {T, M}
-#  is, js = A.rowindices[i], A.colindices[j]
-#  return view(A.A, is, js)
-#end
+tile(A::BlockArray{T}, i, j) where {T} = blocks(A)[i, j]
 
 function LinearAlgebra.lu!(RL::RLLU, A::AbstractMatrix)
   tasks = Task[]
