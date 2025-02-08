@@ -23,8 +23,8 @@ end
 
 using StatProfilerHTML, Profile
 function foo()
-    ntiles=16
-    tilesize=128
+    ntiles=64÷4
+    tilesize=256÷4
   s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=0)
   s .+= 10 * I(size(s, 1))
   b = rand(ComplexF64, size(s, 1))
@@ -49,7 +49,7 @@ function foo()
   #return
 
 @testset "rightlooklu!" begin
-  for n in (128,256), lutiles in (16, 32)
+  for n in (128,256), lutiles in (8, 16, 32)
     lutiles > n && continue
     A = rand(ComplexF64, n, n)
     L, U = lu(A, NoPivot())
@@ -82,6 +82,8 @@ function foo()
       ta2 = mybenchmark(x->lu!(LR, x), s; n=20)
   #    @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2
       transpose!(lulrlu)
+      x = s \ b
+      @test x ≈ lulrlu \ b
       ta3 = mybenchmark(x->x \ b, lulrlu; n=20)
       @show ntiles, tilesize, overlap, lutiles, ta1 / tb1, ta2 / tb2, ta3 / tb3
     end

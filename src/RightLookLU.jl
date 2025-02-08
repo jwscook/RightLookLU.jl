@@ -3,24 +3,22 @@ module RightLookLU
 using Base.Threads, LinearAlgebra, SparseArrays
 using ChunkSplitters
 using BlockArrays
+using HybridBlockArrays
+import HybridBlockArrays: tile
 
 export RLLU
 
-lsolve!(A, L::AbstractSparseArray) = (A .= L \ A) # can't mutate L
-lsolve!(A, L) = ldiv!(A, lu(L), A) # could use a work array here in lu!
+lsolve!(A, L::AbstractSparseArray, _) = (A .= L \ A) # can't mutate L
 function lsolve!(A, L, work)
   W = view(work, 1:size(L, 1), 1:size(L, 2))
   copyto!(W, L) # W .= L
-  #LoopVectorization.vmapntt!(identity, W, L)
   luW = lu!(W, Val(true); check=false) # lu!(W, NoPivot(); check=false) calls generic lu!
   ldiv!(luW, A)
 end
-rsolve!(A, U::AbstractSparseArray) = (A .= A / U) # can't mutate U
-rsolve!(A, U) = rdiv!(A, lu(U)) # could use a work array here in lu!
+rsolve!(A, U::AbstractSparseArray, _) = (A .= A / U) # can't mutate U
 function rsolve!(A, U, work)
   W = view(work, 1:size(U, 1), 1:size(U, 2))
   copyto!(W, U) # W .= U
-  #LoopVectorization.vmapntt!(identity, W, U)
   luW = lu!(W, Val(true); check=false) # lu!(W, NoPivot(); check=false) calls generic lu!
   rdiv!(A, luW)
 end
@@ -39,7 +37,8 @@ function RLLU(A::AbstractMatrix, ntiles::Int=32)
   rowindices = collect(chunks(1:size(A, 1); n=ntiles))
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
   isempties = zeros(Bool, length(rowindices), length(colindices))
-  A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
+  #A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
+  A = HybridBlockArray(A, rowindices, colindices; sparsitythreshold=0.3)
   works = [similar(A, maximum(length(is) for is in rowindices),
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
   return RLLU(A, ntiles, rowindices, colindices, isempties, works, Ref(false))
@@ -47,12 +46,13 @@ end
 Base.size(A::RLLU) = size(A.A)
 Base.size(A::RLLU, i) = size(A.A, i)
 
-tile(A::RLLU{T, M}, i, j) where {T, M<:BlockArray{T}} = blocks(A.A)[i, j]
+tile(A::RLLU{T}, i, j) where {T} = tile(A.A, i, j)
+tile(A::BlockArray{T}, i, j) where {T} = blocks(A.A)[i, j]
 
-function tile(A::RLLU{T, M}, i, j) where {T, M}
-  is, js = A.rowindices[i], A.colindices[j]
-  return view(A.A, is, js)
-end
+#function tile(A::RLLU{T, M}, i, j) where {T, M}
+#  is, js = A.rowindices[i], A.colindices[j]
+#  return view(A.A, is, js)
+#end
 
 function LinearAlgebra.lu!(RL::RLLU, A::AbstractMatrix)
   tasks = Task[]
@@ -149,27 +149,55 @@ function findtile(i::Int, indices)::Int
   throw(BoundsError())
   return 0
 end
+function tileloop!(s::Number, t::SubArray{<:Number, 1, <:SparseMatrixCSC}, b)
+  is, j = t.indices
+  cs = t.parent.colptr[j]:(t.parent.colptr[j+1] - 1)
+  for c in cs
+    i = t.parent.rowval[c]
+    fastin(i, is) || continue
+    tc = t.parent.nzval[c]
+    bi = b[i - is.start + 1]
+    s += tc * bi
+  end
+  return s
+#  return s + transpose(t) * b # TODO write this as a loop
+end
 function tileloop!(s, t::SubArray{<:Number, 1, <:SparseMatrixCSC}, b)
-  @inbounds for k in 1:size(b, 2)
-    @simd for i in axes(t, 1)
-      s[k] += t[i] * b[i, k]
+  is, j = t.indices
+  cs = t.parent.colptr[j]:(t.parent.colptr[j+1]-1)
+  for c in cs
+    i = t.parent.rowval[c]
+    fastin(i, is) || continue
+    for k in 1:size(b, 2)
+      s[k] += t.parent.nzval[c] * b[i - is.start + 1, k]
     end
   end
+  return s
+  # return s .+= transpose(t) * b # TODO write this as a loop
+end
+function tileloop!(s::Number, t, b)
+  return s + BLAS.dotu(t, b)
 end
 function tileloop!(s, t, b)
-  #sc = deepcopy(s)
-  #s1 = deepcopy(s)
-  BLAS.gemm!('T', 'N', one(eltype(s)), b, t, one(eltype(s)), s) # gemm!(tA, tB, a, A, B, b, C) # C = a*A*B + b*C
-  #@inbounds for k in 1:size(b, 2)
-  #  @simd for i in axes(t, 1)
-  #    sc[k] += t[i] * b[i, k]
-  #  end
-  #end
-  #@assert sc ≈ s "$sc, $s, $(s1 + transpose(b) * t), $t, $b"
+  # gemm!(tA, tB, a, A, B, b, C) # C = a*A*B + b*C
+  BLAS.gemm!('T', 'N', one(eltype(s)), b, t, one(eltype(s)), s)
+  return s
 end
+function finalloop!(b, s, invAjj, j)
+  @inbounds @simd for k in 1:size(b, 2)
+    b[j, k] = (b[j, k] - s[k]) * invAjj # L[j, j] should be 1 but it shares a diagonal with U
+  end
+  return b
+end
+function finalloop!(b::AbstractVector, s::Number, invAjj, j)
+  b[j] = (b[j] - s) * invAjj
+  return b
+end
+prepsummand(s::Number) = zero(typeof(s))
+prepsummand(s) = fill!(s, 0)
 
 function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) where {T}
-  fill!(s, 0)
+  s = prepsummand(s)
   #for i in rows, k in 1:size(b, 2); s[k] += A.A[i, j] * b[i, k]; end; return ### the default
   Δj = A.colindices[jtile].start - 1
   itile = findtile(j, A.rowindices) # not necessary if A.rowindices == A.colindices
@@ -179,31 +207,27 @@ function hotloopldiv!(s, A::RLLU{T}, b, rows, j, itiles, jtile, xinvAjj::Bool) w
     @inbounds invAjj = 1 / tile(A, itile, jtile)[j - Δi, j - Δj]
   end
 
-  #ss = [zeros(T, size(b, 2)) for _ in 1:nthreads()] # comment for non-threaded
-  #@threads for itile in collect(itiles) # comment for non-threaded
-  #  s = ss[threadid()] # comment for non-threaded
-  @inbounds for itile in itiles # UNCOMMENT for non-threaded
+  @inbounds for itile in itiles
     A.isempties[itile, jtile] && continue
     tilerows = A.rowindices[itile]
     Δi = tilerows.start - 1
     t = tile(A, itile, jtile)
-    tj = view(t, :, j - Δj)
     if rows.start <= tilerows.start <= tilerows.stop <= rows.stop
-      bj = view(b, tilerows, :)
-      tileloop!(s, tj, bj)
+      tj = view(t, :, j - Δj) # do views in tileloop! <: Matrix
+      bj = view(b, tilerows, :) # just do index access in tileloop! <: SparseArrayCSC
+      s = tileloop!(s, tj, bj)
     else
-      for i in intersect(rows, tilerows)
-        for k in 1:size(b, 2)
-          @inbounds s[k] += tj[i - Δi] * b[i, k]
-        end
-      end
+      is = intersect(rows, tilerows)
+      isempty(is) && continue
+      tj = view(t, is .- Δi, j - Δj)
+      bj = view(b, is, :)
+      s = tileloop!(s, tj, bj) 
     end
   end
-  @inbounds @simd for k in 1:size(b, 2)
-    b[j, k] = (b[j, k] - s[k]) * invAjj # L[j, j] should be 1 but it shares a diagonal with U
-  end
-  #s1 .= sum(ss; init=zeros(T, size(b, 2))) # comment for non-threaded
+  finalloop!(b, s, invAjj, j)
 end
+createsummand(b::AbstractMatrix) = zeros(eltype(b), size(b, 2))
+createsummand(b::AbstractVector) = zero(eltype(b))
 function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
     transposeback=false) where {T}
   if !A.istransposed[]
@@ -211,7 +235,7 @@ function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
   end
   n = size(A, 1)
   # Solve Ly = b
-  s = zeros(T, size(b, 2))
+  s = createsummand(b)
   for j in 2:n
     jtile = findtile(j, A.colindices)
     itilemax = findtile(j-1, A.rowindices)
@@ -222,7 +246,12 @@ function LinearAlgebra.ldiv!(A::RLLU{T}, b::AbstractVecOrMat{T},
   for j in n-1:-1:1
     jtile = findtile(j, A.colindices)
     itilemin = findtile(j+1, A.rowindices)
-    hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile, true)
+    try
+      hotloopldiv!(s, A, b, j+1:n, j, itilemin:A.ntiles, jtile, true)
+    catch err
+      @show j, jtile, itilemin, size(A), size(b)
+      rethrow(err)
+    end
   end
   if A.istransposed[] && transposeback
     transpose!(A)
