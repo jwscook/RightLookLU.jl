@@ -2,7 +2,7 @@
 
 julia_version = "1.10.8"
 manifest_format = "2.0"
-project_hash = "1591b524d92a8f9d21d9e50db31c0a331a31cdac"
+project_hash = "6bf24966401f7483bd30d32ae6aae319ec1b100f"
 
 [[deps.ArrayLayouts]]
 deps = ["FillArrays", "LinearAlgebra"]
@@ -54,12 +54,6 @@ version = "1.13.0"
     PDMats = "90014a1f-27ba-587c-ab20-58faa44d9150"
     SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
     Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-
-[[deps.HybridBlockArrays]]
-deps = ["ChunkSplitters", "LinearAlgebra", "SparseArrays"]
-path = "../HybridBlockArrays.jl"
-uuid = "c01b3b2d-6ffc-4f93-8ae5-34077a31c86c"
-version = "0.1.0"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
