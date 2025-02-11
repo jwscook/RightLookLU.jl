@@ -39,6 +39,9 @@ function RLLU(A::AbstractMatrix, ntiles::Int=32)
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
   isempties = zeros(Bool, length(rowindices), length(colindices))
   A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
+  for i in eachindex(rowindices), j in eachindex(colindices)
+    isempties[i, j] = iszero(tile(A, i, j))
+  end
   #A = HybridBlockArray(A, rowindices, colindices; sparsitythreshold=0.3)
   works = [similar(A, maximum(length(is) for is in rowindices),
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
