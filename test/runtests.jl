@@ -26,7 +26,7 @@ using StatProfilerHTML, Profile
 function foo()
    ntiles=64 ÷ 2
    tilesize=256 ÷ 2
-  s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=0)
+  s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=tilesize ÷ 4)
   s .+= 10 * I(size(s, 1))
   b = rand(ComplexF64, size(s, 1))
   x = s \ b
@@ -39,7 +39,7 @@ function foo()
   Profile.clear()
   @profilehtml ldiv!(x, lurl, b)
   #@assert false
-  s2 = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=0)
+  s2 = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=tilesize ÷ 4)
   s2 .+= 10 * I(size(s2, 1))
   s2 .+= sprand(ComplexF64, size(s2, 1), size(s2, 2), 0.1)
   lu!(rl, s2)
@@ -65,7 +65,7 @@ function foo()
   #  @show n, lutiles, t1 / t2
   #  @benchmark lu!(RLLU($A, $lutiles))
   #end
-  for ntiles in (4, 8, 16), tilesize in (16, 32, 64), overlap in (0,)
+  for ntiles in (4, 8, 16), tilesize in (16, 32, 64), overlap in (tilesize ÷ 4,)
     s = test_matrix(ComplexF64; ntiles=ntiles, tilesize=tilesize, overlap=overlap)
     s .+= 10 * I(size(s, 1))
     lu_s = lu(deepcopy(s))
