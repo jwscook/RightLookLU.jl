@@ -11,19 +11,21 @@ export RLLUMatrix
 
 #lsolve!(A, L::LowerTriangular{<:Number, <:AbstractSparseMatrix}, _) = (A .= L \ A) # can't mutate L
 function lsolve!(A, L::LowerTriangular{<:Number, <:AbstractSparseMatrix}, _)
-  for j in 1:size(A, 2)
-    vAj = view(A, :, j)
-    iszero(vAj) || (vAj .= L \ vAj)
-  end
+  A .= L \ A
+  #for j in 1:size(A, 2)
+  #  vAj = view(A, :, j)
+  #  iszero(vAj) || (vAj .= L \ vAj)
+  #end
 end
 lsolve!(A, L, work) = ldiv!(A, L, A)
 #rsolve!(A, U::UpperTriangular{<:Number, <:AbstractSparseMatrix}, _) = (A .= A / U) # can't mutate U
 rsolve!(A, U, work) = rdiv!(A, U)
 function rsolve!(A, U::UpperTriangular{<:Number, <:AbstractSparseMatrix}, _)
-  for i in 1:size(A, 1)
-    vAi = transpose(view(A, i, :))
-    iszero(vAi) || (vAi .= vAi / U)
-  end
+  A .= A / U
+  #for i in 1:size(A, 1)
+  #  vAi = transpose(view(A, i, :))
+  #  iszero(vAi) || (vAi .= vAi / U)
+  #end
 end
 
 struct RLLUMatrix{T, M<:AbstractMatrix{T}}
@@ -157,7 +159,7 @@ function subtractleft!(A::RLLUMatrix, i, j)
     Ukj = tile(A, k, j)
     _subtractleftmul!(Aij, Lik, Ukj)
   end
-  A.isempties[i, j] = isempty(Aij) || iszero(Aij)
+  #A.isempties[i, j] = isempty(Aij) || iszero(Aij)
   return Aij
 end
 
@@ -207,10 +209,12 @@ function tileloop!(s, t::SparseMatrixCSC, b, j, trows::U, brows::U) where {U<:Un
   end
   return s
 end
+dotu(a::AbstractVector{<:Real}, b::AbstractVector{<:Real}) = dot(a, b)
+dotu(a::AbstractVector{<:Complex}, b::AbstractVector{<:Complex}) = BLAS.dotu(a, b)
 function tileloop!(s::Number, t, b, j, trows, brows)
   tv = view(t, trows, j)
   bv = view(b, brows)
-  return s + sum(i->tv[i] * bv[i], eachindex(tv))#BLAS.dotu(tv, bv)
+  return s + dotu(tv, bv)
 end
 function tileloop!(s, t, b, j, trows, brows)
   tv = view(t, trows, j)
