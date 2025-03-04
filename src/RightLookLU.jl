@@ -37,12 +37,11 @@ struct RLLUMatrix{T, M<:AbstractMatrix{T}}
   works::Vector{Matrix{T}}
   istransposed::Ref{Bool}
 end
-function RLLUMatrix(A::AbstractMatrix, ntiles::Int=32)
-  @assert ntiles <= minimum(size(A))
-  rowindices = collect(chunks(1:size(A, 1); n=ntiles))
-  colindices = collect(chunks(1:size(A, 2); n=ntiles))
+function RLLUMatrix(A::AbstractMatrix, rowindices::Vector{UnitRange{Int}},
+    colindices::Vector{UnitRange{Int}}=rowindices)
+  @assert length(rowindices) == length(colindices)
+  ntiles = length(rowindices)
   A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
-  #A = HybridBlockArray(A, rowindices, colindices; sparsitythreshold=0.2)
   isempties = zeros(Bool, length(rowindices), length(colindices))
   for i in eachindex(rowindices), j in eachindex(colindices)
     isempties[i, j] = iszero(tile(A, i, j))
@@ -51,6 +50,14 @@ function RLLUMatrix(A::AbstractMatrix, ntiles::Int=32)
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
   return RLLUMatrix(A, ntiles, rowindices, colindices, isempties, works, Ref(false))
 end
+
+function RLLUMatrix(A::AbstractMatrix, ntiles::Int=32)
+  @assert ntiles <= minimum(size(A))
+  rowindices = collect(chunks(1:size(A, 1); n=ntiles))
+  colindices = collect(chunks(1:size(A, 2); n=ntiles))
+  return RLLUMatrix(A, rowindices, colindices)
+end
+
 Base.size(A::RLLUMatrix) = size(A.A)
 Base.size(A::RLLUMatrix, i) = size(A.A, i)
 
