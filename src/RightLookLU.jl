@@ -3,9 +3,8 @@ module RightLookLU
 using Base.Threads, LinearAlgebra, SparseArrays
 using ChunkSplitters
 using BlockArrays
-using TriangularSolve
-#using HybridBlockArrays
-#import HybridBlockArrays: tile
+
+const USEMPI = in(:MPI, Symbol.(values(Base.loaded_modules)))
 
 export RLLUMatrix
 
@@ -28,7 +27,17 @@ function rsolve!(A, U::UpperTriangular{<:Number, <:AbstractSparseMatrix}, _)
   #end
 end
 
-struct RLLUMatrix{T, M<:AbstractMatrix{T}}
+abstract type AbstractContext end
+
+struct ThreadedContext <: AbstractContext end
+
+struct SharedMemoryMPIContext{T} <: AbstractContext
+  comm::T
+  rank::Int
+  size::Int
+end
+
+struct RLLUMatrix{T, M<:AbstractMatrix{T}, C<:AbstractContext}
   A::M
   ntiles::Int
   rowindices::Vector{UnitRange{Int64}}
@@ -36,9 +45,11 @@ struct RLLUMatrix{T, M<:AbstractMatrix{T}}
   isempties::Matrix{Bool}
   works::Vector{Matrix{T}}
   istransposed::Ref{Bool}
+  context::C
 end
+
 function RLLUMatrix(A::AbstractMatrix, rowindices::Vector{UnitRange{Int}},
-    colindices::Vector{UnitRange{Int}}=rowindices)
+    colindices::Vector{UnitRange{Int}}=rowindices; context=ThreadedContext())
   @assert length(rowindices) == length(colindices)
   ntiles = length(rowindices)
   A = BlockArray(A, [length(is) for is in rowindices], [length(js) for js in colindices])
@@ -48,14 +59,14 @@ function RLLUMatrix(A::AbstractMatrix, rowindices::Vector{UnitRange{Int}},
   end
   works = [similar(A, maximum(length(is) for is in rowindices),
                       maximum(length(js) for js in colindices)) for _ in 1:nthreads()]
-  return RLLUMatrix(A, ntiles, rowindices, colindices, isempties, works, Ref(false))
+  return RLLUMatrix(A, ntiles, rowindices, colindices, isempties, works, Ref(false), context)
 end
 
-function RLLUMatrix(A::AbstractMatrix, ntiles::Int=32)
+function RLLUMatrix(A::AbstractMatrix, ntiles::Int=32; context=ThreadedContext())
   @assert ntiles <= minimum(size(A))
   rowindices = collect(chunks(1:size(A, 1); n=ntiles))
   colindices = collect(chunks(1:size(A, 2); n=ntiles))
-  return RLLUMatrix(A, rowindices, colindices)
+  return RLLUMatrix(A, rowindices, colindices; context=context)
 end
 
 Base.size(A::RLLUMatrix) = size(A.A)
@@ -82,7 +93,9 @@ function LinearAlgebra.lu!(RL::RLLUMatrix)
 end
 
 function LinearAlgebra.lu!(RLS::RLLUStruct, A::AbstractMatrix)
-  RL = RLS.A
+  return lu!(RLS.A, A)
+end
+function LinearAlgebra.lu!(RL::RLLUMatrix, A::AbstractMatrix)
   tasks = Task[]
   if RL.istransposed[]
     RL.istransposed[] = false
@@ -95,7 +108,7 @@ function LinearAlgebra.lu!(RLS::RLLUStruct, A::AbstractMatrix)
   wait.(tasks)
   #@assert all(RL.A .≈ A)
   lu!(RL)
-  return RLS
+  return RLLUStruct(RL)
 end
 LinearAlgebra.transpose!(A::RLLUStruct) = transpose!(A.A)
 function LinearAlgebra.transpose!(A::RLLUMatrix)
@@ -130,6 +143,11 @@ function factorise!(A::RLLUMatrix, level)
   Lll, Ull = diagonallu!(All, A.works[threadid()])
   Lll = LowerTriangular(Lll) # non-allocating
   Ull = UpperTriangular(Ull) # non-allocating
+  A = innerfactorise!(A, level, Lll, Ull)
+  return A
+end
+
+function innerfactorise!(A::RLLUMatrix{T,M,ThreadedContext}, level, Lll, Ull) where {T,M}
   tasks = Task[]
   for k in level + 1:A.ntiles
     push!(tasks, @spawn lookright!(A, level, k, Lll, Ull))
@@ -137,6 +155,23 @@ function factorise!(A::RLLUMatrix, level)
   end
   wait.(tasks)
   return A
+end
+
+@static if USEMPI
+  function innerfactorise!(A::RLLUMatrix{T,M,SharedMemoryMPIContext}, level, Lll, Ull) where {T,M}
+    ijs = Vector{Tuple{Int,Int}}()
+    for k in level + 1:A.ntiles
+        push!(ijs, (level, k))
+        push!(ijs, (k, level))
+    end
+    for (c, ij) in enumerate(ijs)
+      if rem(c, A.context.size) == A.context.rank
+        lookright!(A, k, level, Lll, Ull)
+      end
+    end
+    MPI.Barrier(A.context.comm)
+    return A
+  end
 end
 
 function lookright!(A::RLLUMatrix, i, j, L, U)
@@ -166,7 +201,7 @@ function subtractleft!(A::RLLUMatrix, i, j)
     Ukj = tile(A, k, j)
     _subtractleftmul!(Aij, Lik, Ukj)
   end
-  #A.isempties[i, j] = isempty(Aij) || iszero(Aij)
+  A.isempties[i, j] = isempty(Aij) || iszero(Aij)
   return Aij
 end
 
