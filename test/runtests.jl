@@ -15,8 +15,8 @@ function test_matrix(T=Float64; ntiles=6, tilesize=5, overlap=0)
     mat[j:j + tilesize - 1, j:j + tilesize - 1] .= rand(T, tilesize, tilesize)
   end
   mat .+= sprand(T, n, n, 0.1)
-  #return sparse(mat)
-  return mat
+  return sparse(mat)
+  #return mat
 end
 
 function mybenchmark(f::F, args...; n=3) where F
@@ -71,7 +71,7 @@ function foo()
     s .+= 10 * I(size(s, 1))
     lu_s = lu(deepcopy(s))
     tb1 = mybenchmark(x->lu!(x, NoPivot()), s; n=2)
-    tb2 = mybenchmark(x->lu!(lu_s, x), s; n=2)
+    tb2 = typeof(s) <: SparseMatrixCSC ? mybenchmark(x->lu!(lu_s, x), s; n=2) : NaN
     b = rand(ComplexF64, size(s, 1))
     tb3 = mybenchmark(x->x \ b, lu_s; n=2)
     for lutiles in unique(min.(size(s, 1), (4, 7, 8, 16, 17, 32, 64)))

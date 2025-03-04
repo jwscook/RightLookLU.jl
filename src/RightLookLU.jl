@@ -193,7 +193,7 @@ function subtractleft!(A::RLLUMatrix, i, j)
     Ukj = tile(A, k, j)
     _subtractleftmul!(Aij, Lik, Ukj)
   end
-  #A.isempties[i, j] = isempty(Aij) || iszero(Aij)
+  A.isempties[i, j] = isempty(Aij) || iszero(Aij)
   return Aij
 end
 
