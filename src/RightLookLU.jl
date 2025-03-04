@@ -262,9 +262,9 @@ function tileloop!(s, t, b, j, trows, brows)
   tv = view(t, trows, j)
   bv = view(b, brows, :)
   # gemm!(tA, tB, a, A, B, b, C) # C = a*A*B + b*C
-#  BLAS.gemm!('T', 'N', one(eltype(s)), bv, tv, one(eltype(s)), s)
-#  return s
-  return s + transpose(b) * t
+  #BLAS.gemm!('T', 'N', one(eltype(s)), bv, tv, one(eltype(s)), s)
+  #return s
+  return s + transpose(tv) * bv
 end
 function finalloop!(b, s, invAjj, j)
   @inbounds @simd for k in 1:size(b, 2)
